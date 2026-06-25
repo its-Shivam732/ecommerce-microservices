@@ -1,10 +1,26 @@
 # ecommerce-microservices
 
-# Live Demo Link https://drive.google.com/file/d/1E3k1a3kZLwP480L99RVLy36Ey6oOhQVB/view?usp=sharing
+# Live Demo https://drive.google.com/file/d/1E3k1a3kZLwP480L99RVLy36Ey6oOhQVB/view?usp=sharing
 
 A microservices-based e-commerce application built with Spring Boot, demonstrating REST
 inter-service communication, resilience patterns (Resilience4j), event-driven messaging
 (Kafka), OAuth2 security, and PostgreSQL persistence on AWS RDS.
+
+## Table of Contents
+
+- [Services](#services)
+- [Module layout](#module-layout)
+- [Persistence](#persistence)
+- [Reservation and idempotency](#reservation-and-idempotency-how-the-synchronous-transaction-is-kept-safe)
+- [Inter-service communication](#inter-service-communication)
+- [Messaging (Kafka)](#messaging-kafka)
+- [Security (OAuth2)](#security-oauth2)
+- [Tests](#tests)
+- [Running locally](#running-locally)
+- [API endpoints](#api-endpoints)
+- [Swagger / OpenAPI](#swagger--openapi)
+- [Resilience: how it behaves](#resilience-how-it-behaves)
+- [Known limitations](#known-limitations-intentional-scoped-for-the-assignment)
 
 ## Services
 
@@ -105,7 +121,10 @@ auth-server, since the downstream services are protected.
 
 Asynchronous (Kafka): when an order is confirmed, order-service also publishes an
 `OrderPlaced` event to the `order-notifications` Kafka topic. notification-service consumes
-it and creates a notification.**This is in addition to the REST notification path (POST endpoint given in assignment), demonstrating the event-driven pattern alongside the synchronous one. This is just for homework sake where we demonstrate both aynchronus(kafka) and synchronus(rest) message passing**
+it and creates a notification. **This is in addition to the REST notification path (the POST
+endpoint required by the assignment), demonstrating the event-driven pattern alongside the
+synchronous one — included for the homework's sake to show both asynchronous (Kafka) and
+synchronous (REST) message passing.**
 
 ## Messaging (Kafka)
 
@@ -249,3 +268,18 @@ The order -> product reserve call is wrapped with Resilience4j **Retry** + **Cir
 To see the breaker trip: start order-service but NOT product-service, POST a few orders, and
 watch `GET http://localhost:8082/actuator/circuitbreakers` move the breaker CLOSED -> OPEN.
 
+## Known limitations (intentional, scoped for the assignment)
+
+- **No compensation across order lines.** If an order has several lines and a later line
+  fails to reserve, stock reserved for earlier lines is not released. A full saga would emit
+  a compensating release. This is the documented trade-off of the synchronous-reserve design.
+- **Per-call idempotency only.** order-service generates a fresh idempotency key per reserve
+  call, which protects the network hop. End-to-end "place this exact order once" would need a
+  client-supplied order-level key.
+- **Dual notification paths.** Both the REST call and the Kafka event create a notification
+  for a placed order, so a confirmed order produces two notification rows (channels `EMAIL`
+  and `EMAIL_KAFKA`). This is intentional for the demo, to make the event-driven path
+  visible; a production system would use one path (the event) and retain REST only for
+  manual sends.
+- **Auth-server signing key is regenerated at each startup**, so restarting the auth-server
+  invalidates previously issued tokens. A fixed key from config would persist them.
