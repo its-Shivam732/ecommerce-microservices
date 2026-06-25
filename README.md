@@ -1,7 +1,8 @@
 # ecommerce-microservices
 
-A microservices-based e-commerce application built with Spring Boot, demonstrating
-REST inter-service communication and resilience patterns (Resilience4j).
+A microservices-based e-commerce application built with Spring Boot, demonstrating REST
+inter-service communication, resilience patterns (Resilience4j), event-driven messaging
+(Kafka), OAuth2 security, and PostgreSQL persistence on AWS RDS.
 
 ## Services
 
@@ -10,8 +11,8 @@ REST inter-service communication and resilience patterns (Resilience4j).
 | auth-server          | 9000 | OAuth2 authorization server (issues JWTs)       |
 | api-gateway          | 8080 | Single entry point; validates JWTs, routes      |
 | product-service      | 8081 | Product catalog and stock management            |
-| order-service        | 8082 | Order placement; reserves stock from product    |
-| notification-service | 8083 | Sends notifications when orders are placed       |
+| order-service        | 8082 | Order placement; reserves stock, publishes events |
+| notification-service | 8083 | Sends notifications (REST endpoint + Kafka listener) |
 
 Each business service is an independent Spring Boot application with its own database.
 They are organized as Maven modules in a single repository (monorepo) for ease of
@@ -26,61 +27,118 @@ through the gateway on port 8080 with a `Bearer` JWT obtained from the auth-serv
 ecommerce-microservices/
 ├── pom.xml                  parent (packaging=pom), shared dependency management
 ├── common/                  shared cross-service DTOs and event payloads (wire contracts only)
+├── auth-server/             OAuth2 authorization server (Spring Authorization Server)
+├── api-gateway/             Spring Cloud Gateway; validates JWTs and routes
 ├── product-service/         catalog + stock
-├── order-service/           orders + Resilience4j-protected call to product
-└── notification-service/    notifications
+├── order-service/           orders + Resilience4j-protected call to product + Kafka producer
+└── notification-service/    notifications (REST + Kafka consumer)
 ```
 
-The `common` module deliberately contains only DTOs/contracts, no business logic,
-to avoid re-coupling the services.
+The `common` module deliberately contains only DTOs/contracts and event payloads, no
+business logic, to avoid re-coupling the services.
 
 ## Persistence
 
-Currently uses an in-memory H2 database per service so the system runs with no
-external setup. Each H2 console is available at `/h2-console` on the service port.
-Swapping to PostgreSQL/RDS later requires only `application.yml` and dependency
-changes — no code changes, since persistence goes through Spring Data JPA.
+Each service uses its own PostgreSQL database on a shared AWS RDS instance
+(`productdb`, `orderdb`, `notificationdb`) — one logical database per service, with no
+cross-service queries. This preserves the database-per-service boundary while fitting the
+RDS free tier (one instance); in production each would be promoted to its own instance for
+true physical isolation and independent scaling.
+
+Connection details live in each service's `application.yml`. The database password is
+supplied via the `DB_PASSWORD` environment variable rather than committed to source.
+Persistence goes through Spring Data JPA, so the database choice is isolated to
+configuration. The H2 driver is also retained in each POM for offline/local runs and is
+used by the integration tests.
 
 ## Inter-service communication
 
-- order-service calls product-service over REST to reserve stock before an order
-  is committed (synchronous validation hop).
-- The call is wrapped with Resilience4j **CircuitBreaker** + **Retry**. Idempotency
-  keys on the reserve request make retries safe over an unreliable network.
+Synchronous (REST + Resilience4j): order-service calls product-service to reserve stock
+before an order is committed. The call is wrapped with Resilience4j **CircuitBreaker** +
+**Retry**, and an idempotency key on the reserve request makes retries safe over an
+unreliable network. Outbound calls carry a client-credentials JWT obtained from the
+auth-server, since the downstream services are protected.
+
+Asynchronous (Kafka): when an order is confirmed, order-service also publishes an
+`OrderPlaced` event to the `order-notifications` Kafka topic. notification-service consumes
+it and creates a notification. This is in addition to the REST notification path (see
+below), demonstrating the event-driven pattern alongside the synchronous one.
+
+## Messaging (Kafka)
+
+Kafka runs locally in Docker for development:
+
+```bash
+docker run -d --name kafka -p 9092:9092 apache/kafka:3.8.0
+```
+
+Create the topic:
+
+```bash
+docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --create --topic order-notifications \
+  --bootstrap-server localhost:9092 \
+  --partitions 1 --replication-factor 1
+```
+
+On placing an order, notification-service receives the notification two ways: via the
+synchronous REST call (channel `EMAIL`) and via the Kafka event (channel `EMAIL_KAFKA`).
+The Kafka-originated row is tagged so the two paths are distinguishable. In production the
+notification hop would move entirely onto the event/queue, with the REST endpoint retained
+only for direct/manual sends. (Locally Kafka runs in Docker; in production this would be a
+managed broker such as AWS MSK or Confluent Cloud.)
+
+## Security (OAuth2)
+
+The auth-server (Spring Authorization Server) issues JWT access tokens using the
+client-credentials grant. The gateway and all three services validate tokens. See
+`SECURITY.md` for the token-fetch curl and full details.
 
 ## Tests
 
-Run all tests with `mvn test` (or `mvn verify`). Two layers:
+Run all tests with `mvn test`. Set `JAVA_HOME` to a JDK 17 first if running from the
+terminal (`export JAVA_HOME=$(/usr/libexec/java_home -v 17)`). Two layers:
 
 Unit tests (JUnit 5 + Mockito, no Spring context, no DB) cover the service logic:
 `ProductServiceTest` (idempotent reservation, stock decrement, insufficient-stock and
 not-found cases), `OrderServiceTest` (reservation orchestration: confirm-and-notify on
 success, reject on insufficient stock), and `NotificationServiceTest`.
 
-Integration tests (`@SpringBootTest` + MockMvc against in-memory H2, activated by the `test`
-profile) cover controller -> service -> JPA: `ProductControllerIT`, `OrderControllerIT`,
-`NotificationControllerIT`. They assert real HTTP status codes and JSON, including that
-endpoints return 401 without a token and succeed with one. Security is satisfied with a mock
-JWT (`spring-security-test`), and a stub `JwtDecoder` avoids contacting the auth-server at
-startup. In `OrderControllerIT` the downstream clients are mocked, so the test runs without
-product-service or notification-service.
+Integration tests (`@SpringBootTest` + MockMvc against in-memory H2, activated by the
+`test` profile) cover controller -> service -> JPA: `ProductControllerIT`,
+`OrderControllerIT`, `NotificationControllerIT`. They assert real HTTP status codes and
+JSON, including that endpoints return 401 without a token and succeed with one. Security is
+satisfied with a mock JWT (`spring-security-test`), and a stub `JwtDecoder` avoids
+contacting the auth-server at startup. In `OrderControllerIT` the downstream clients and the
+Kafka publisher are mocked, so the test runs without product-service, notification-service,
+or a running Kafka broker.
 
 The integration tests use H2 (zero setup). For higher fidelity against real Postgres,
 Testcontainers would spin up a Postgres container per run -- not used here to avoid a Docker
-dependency.
+dependency for the test suite.
 
-## Running locally (IntelliJ)
+## Running locally
 
-Each service has its own `@SpringBootApplication` main class. Create a separate run
-configuration per service and start them independently; all three can run at once on
-their respective ports.
+Start order: **Kafka (Docker)** -> **auth-server (9000)** -> **product / notification /
+order (8081 / 8083 / 8082)** -> **api-gateway (8080)**.
 
-Or from the command line:
+Environment variables (per IntelliJ run config, or exported in the shell):
+
+```
+DB_PASSWORD=<your-rds-password>          # all three business services
+OAUTH_CLIENT_SECRET=ecommerce-secret     # order-service (defaults to this if unset)
+```
+
+Each service has its own `@SpringBootApplication` main class; create a run configuration
+per service and start them independently. Or from the command line:
 
 ```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+mvn -pl auth-server spring-boot:run
 mvn -pl product-service spring-boot:run
-mvn -pl order-service spring-boot:run
 mvn -pl notification-service spring-boot:run
+mvn -pl order-service spring-boot:run
+mvn -pl api-gateway spring-boot:run
 ```
 
 Build everything:
@@ -90,6 +148,9 @@ mvn clean install
 ```
 
 ## API endpoints
+
+All endpoints require a `Bearer` JWT. Through the gateway, use `http://localhost:8080`;
+directly, use each service's own port.
 
 ### product-service (8081)
 | Method | Path                | Description                          |
@@ -101,24 +162,24 @@ mvn clean install
 | POST   | /products/reserve   | Reserve stock (Idempotency-Key header) |
 
 ### order-service (8082)
-| Method | Path           | Description                              |
-|--------|----------------|------------------------------------------|
-| GET    | /orders        | List all orders                          |
-| GET    | /orders/{id}   | Get an order by id                       |
-| POST   | /orders        | Place an order (reserves stock + notifies) |
+| Method | Path           | Description                                |
+|--------|----------------|--------------------------------------------|
+| GET    | /orders        | List all orders                            |
+| GET    | /orders/{id}   | Get an order by id                         |
+| POST   | /orders        | Place an order (reserves stock, notifies, publishes Kafka event) |
 
 ### notification-service (8083)
-| Method | Path            | Description           |
-|--------|-----------------|-----------------------|
-| POST   | /notifications  | Send a notification   |
-| GET    | /notifications  | List sent notifications |
+| Method | Path            | Description                                  |
+|--------|-----------------|----------------------------------------------|
+| POST   | /notifications  | Send a notification                          |
+| GET    | /notifications  | List sent notifications (REST + Kafka rows)  |
 
-Sample requests for all endpoints are in `requests.http` (runnable directly in IntelliJ).
+Sample requests are in `requests.http` (runnable directly in IntelliJ).
 
 ## Swagger / OpenAPI
 
-Each service serves its own Swagger UI (springdoc-openapi), generated automatically from the
-controllers and DTOs:
+Each service serves its own Swagger UI (springdoc-openapi), generated from the controllers
+and DTOs:
 
 | Service              | Swagger UI                              | OpenAPI JSON                       |
 |----------------------|-----------------------------------------|------------------------------------|
@@ -126,35 +187,36 @@ controllers and DTOs:
 | order-service        | http://localhost:8082/swagger-ui.html   | http://localhost:8082/v3/api-docs  |
 | notification-service | http://localhost:8083/swagger-ui.html   | http://localhost:8083/v3/api-docs  |
 
-The doc pages are whitelisted in Spring Security, so they open without a token. The API calls
-themselves still require one: click "Authorize" in the UI, paste an access token (see
-SECURITY.md for how to get one), and try-it-out calls will carry the bearer token.
-
-A single aggregated Swagger behind the gateway is possible but not configured here; per-service
-UIs document all endpoints.
+Doc pages are whitelisted in Spring Security, so they open without a token. The API calls
+themselves require one: click "Authorize", paste an access token (see `SECURITY.md`), and
+try-it-out calls carry the bearer token.
 
 ## Resilience: how it behaves
 
 The order -> product reserve call is wrapped with Resilience4j **Retry** + **CircuitBreaker**
-(instance name `productService`, configured in order-service `application.yml`).
+(instance `productService`, configured in order-service `application.yml`).
 
-- **Insufficient stock / unknown product**: product-service returns 409 / 404. The order is
+- **Insufficient stock / unknown product**: product-service returns 409 / 404; the order is
   rejected with **422**. These are valid business answers and do NOT count as circuit-breaker
   failures.
 - **product-service down or hung**: the call fails, Retry attempts it again (safe because of
-  the idempotency key), and if failures persist the circuit **opens** and order placement fails
-  fast with **503** via the client fallback.
+  the idempotency key), and if failures persist the circuit **opens** and order placement
+  fails fast with **503** via the client fallback.
 
-To see the breaker trip: start order-service but NOT product-service, then POST a few orders.
-Watch `GET /actuator/circuitbreakers` move the `productService` breaker from CLOSED to OPEN.
+To see the breaker trip: start order-service but NOT product-service, POST a few orders, and
+watch `GET http://localhost:8082/actuator/circuitbreakers` move the breaker CLOSED -> OPEN.
 
 ## Known limitations (intentional, scoped for the assignment)
 
-- **No compensation across order lines.** If an order has several lines and a later line fails
-  to reserve, stock reserved for earlier lines is not released. A full saga would emit a
-  compensating release. This is the documented trade-off of the synchronous-reserve design.
+- **No compensation across order lines.** If an order has several lines and a later line
+  fails to reserve, stock reserved for earlier lines is not released. A full saga would emit
+  a compensating release. This is the documented trade-off of the synchronous-reserve design.
 - **Per-call idempotency only.** order-service generates a fresh idempotency key per reserve
   call, which protects the network hop. End-to-end "place this exact order once" would need a
   client-supplied order-level key.
-- **Notification is best-effort over REST.** A notification failure is logged and swallowed so
-  it never fails a committed order. In production this hop would move to an event/queue.
+- **Dual notification paths.** Both the REST call and the Kafka event create a notification
+  for a placed order, so a confirmed order produces two notification rows (channels `EMAIL`
+  and `EMAIL_KAFKA`). This is intentional for the demo, to make the event-driven path visible;
+  a production system would use one path (the event) and retain REST only for manual sends.
+- **Auth-server signing key is regenerated at each startup**, so restarting the auth-server
+  invalidates previously issued tokens. A fixed key from config would persist them.
