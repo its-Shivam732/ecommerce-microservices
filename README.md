@@ -51,6 +51,48 @@ Persistence goes through Spring Data JPA, so the database choice is isolated to
 configuration. The H2 driver is also retained in each POM for offline/local runs and is
 used by the integration tests.
 
+## Reservation and idempotency (how the synchronous transaction is kept safe)
+
+This is the core of the cross-service write path and the most important design detail.
+Placing an order requires order-service and product-service to *both* change state — an
+order row is inserted in `orderdb` and stock is decremented in `productdb`. These are two
+separate databases reached over the network, so there is no single ACID transaction
+spanning them; a naive "decrement then insert" is a dual-write that can leave the system
+inconsistent if the network fails between the two steps (e.g. product decrements stock but
+the HTTP response is lost, so order-service never learns it succeeded).
+
+The design addresses this with **idempotent stock reservation**:
+
+1. For each order line, order-service generates a unique **idempotency key** (a UUID) and
+   sends it with the reserve request to product-service (`POST /products/reserve`, key in
+   the `Idempotency-Key` header).
+2. product-service, before decrementing, checks whether it has already processed that key
+   (a `processed_reservations` table with a unique constraint on the key). If yes, it
+   returns the **stored outcome** without decrementing again. If no, it decrements stock,
+   records the key + outcome, and returns.
+3. Crucially, the key insert and the stock decrement happen in **one local transaction
+   inside product-service**. Because that is a single database, it is a normal ACID
+   transaction — the decrement and the "processed" record commit together or not at all.
+
+This makes the reserve call **safe to retry**. When Resilience4j's Retry re-sends a call
+after a transient failure (a dropped connection, a lost response), the same idempotency key
+guarantees the stock is not decremented twice — the retry either completes the original
+operation or returns the outcome that already happened. Idempotency is precisely what turns
+"did that call go through?" from an unanswerable question into a safe re-attempt.
+
+Concurrency is handled two ways: the unique constraint on the idempotency key rejects a
+duplicate concurrent request at the database level, and an `@Version` optimistic-lock column
+on the product row prevents two simultaneous reservations from both succeeding against a
+stale stock count (the second commit fails rather than overselling).
+
+Trade-off and honest boundary: this protects the *network hop* and prevents double
+decrements, but it is not a full distributed transaction. If order-service ultimately gives
+up after exhausting retries while the decrement *did* succeed, the reserved stock is
+orphaned. A production system would add a reserve-then-confirm flow with a timeout (stock is
+held, then released by a reaper if no confirm arrives) or a reconciliation job — and for a
+multi-step workflow, a saga with compensating transactions. Those are the documented next
+steps; the idempotent reserve is the scoped, correct core for this assignment.
+
 ## Inter-service communication
 
 Synchronous (REST + Resilience4j): order-service calls product-service to reserve stock
@@ -61,8 +103,8 @@ auth-server, since the downstream services are protected.
 
 Asynchronous (Kafka): when an order is confirmed, order-service also publishes an
 `OrderPlaced` event to the `order-notifications` Kafka topic. notification-service consumes
-it and creates a notification. 
-**This is in addition to the REST notification path (POST endpoint given in assignment), demonstrating the event-driven pattern alongside the synchronous one. This is just for homework sake where we demonstrate both aynchronus(kafka) and synchronus(rest) message passing**
+it and creates a notification. This is in addition to the REST notification path (see
+below), demonstrating the event-driven pattern alongside the synchronous one.
 
 ## Messaging (Kafka)
 
