@@ -128,6 +128,8 @@ synchronous (REST) message passing.**
 
 ## Messaging (Kafka)
 
+As stated earlier, in addition to the required REST notification endpoint (POST API as per requirement), Kafka is used to demonstrate an event-driven architecture. This showcases both asynchronous (Kafka) and synchronous (REST) message-passing mechanisms as part of the assignment requirements.
+
 Kafka runs locally in Docker for development:
 
 ```bash
