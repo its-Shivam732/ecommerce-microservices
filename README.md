@@ -126,7 +126,7 @@ endpoint required by the assignment), demonstrating the event-driven pattern alo
 synchronous one — included for the homework's sake to show both asynchronous (Kafka) and
 synchronous (REST) message passing.**
 
-## Messaging (Kafka)
+## Messaging 
 
 As stated earlier, in addition to the required REST notification endpoint (POST API as per requirement), Kafka is used to demonstrate an event-driven architecture. This showcases both asynchronous (Kafka) and synchronous (REST) message-passing mechanisms as part of the assignment requirements.
 
@@ -189,7 +189,7 @@ order (8081 / 8083 / 8082)** -> **api-gateway (8080)**.
 Environment variables (per IntelliJ run config, or exported in the shell):
 
 ```
-DB_PASSWORD=<your-rds-password>          # all three business services
+DB_PASSWORD=<your-rds-password>          # all three business services(your rds password)
 OAUTH_CLIENT_SECRET=ecommerce-secret     # order-service (defaults to this if unset)
 ```
 
