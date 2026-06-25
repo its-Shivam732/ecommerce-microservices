@@ -13,7 +13,7 @@ inter-service communication, resilience patterns (Resilience4j), event-driven me
 - [Persistence](#persistence)
 - [Reservation and idempotency](#reservation-and-idempotency-how-the-synchronous-transaction-is-kept-safe)
 - [Inter-service communication](#inter-service-communication)
-- [Messaging (Kafka)](#messaging-kafka)
+- [Messaging](#messaging-kafka)
 - [Security (OAuth2)](#security-oauth2)
 - [Tests](#tests)
 - [Running locally](#running-locally)
