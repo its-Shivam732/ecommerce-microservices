@@ -1,0 +1,19 @@
+server:
+  port: 0
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:productdb-test;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+
+# Point token validation at a dummy issuer; integration tests inject a mock JWT
+# via spring-security-test, so the issuer is never actually contacted.
+springdoc:
+  api-docs:
+    enabled: false

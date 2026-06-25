@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: product-service
+          uri: http://localhost:8081
+          predicates:
+            - Path=/products/**
+        - id: order-service
+          uri: http://localhost:8082
+          predicates:
+            - Path=/orders/**
+        - id: notification-service
+          uri: http://localhost:8083
+          predicates:
+            - Path=/notifications/**
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # The gateway validates incoming tokens against the auth-server's public keys.
+          issuer-uri: http://localhost:9000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

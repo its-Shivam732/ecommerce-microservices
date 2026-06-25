@@ -1,0 +1,115 @@
+### ecommerce-microservices — sample requests (secured)
+###
+### All traffic now goes through the API GATEWAY on port 8080 and requires a JWT.
+### Step 1: run the token request below, copy the access_token from the response.
+### Step 2: paste it into the @token variable.
+### Step 3: run the other requests.
+###
+### Start order: auth-server (9000) -> product/order/notification -> gateway (8080)
+
+@gateway = http://localhost:8080
+@authServer = http://localhost:9000
+@token = PASTE_ACCESS_TOKEN_HERE
+
+### -------------------- GET A TOKEN --------------------
+
+### Request a client-credentials token from the auth-server
+POST {{authServer}}/oauth2/token
+Authorization: Basic ZWNvbW1lcmNlLWNsaWVudDplY29tbWVyY2Utc2VjcmV0
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials&scope=api.read api.write
+
+### -------------------- PRODUCTS (via gateway) --------------------
+
+### No token -> expect 401 Unauthorized
+GET {{gateway}}/products
+
+### With token -> expect 200 and the seeded products
+GET {{gateway}}/products
+Authorization: Bearer {{token}}
+
+### Get one product
+GET {{gateway}}/products/1
+Authorization: Bearer {{token}}
+
+### Add a product
+POST {{gateway}}/products
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Laptop Stand",
+  "description": "Aluminium adjustable stand",
+  "price": 34.50,
+  "availableStock": 40
+}
+
+### Update a product
+PUT {{gateway}}/products/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Wireless Mouse (v2)",
+  "description": "Updated ergonomic mouse",
+  "price": 27.99,
+  "availableStock": 120
+}
+
+### -------------------- ORDERS (via gateway) --------------------
+
+### Place an order. order-service reserves stock from product-service (with its own
+### service token) and fires a notification.
+POST {{gateway}}/orders
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "customerName": "Ada Lovelace",
+  "customerEmail": "ada@example.com",
+  "items": [
+    { "productId": 1, "quantity": 2 },
+    { "productId": 2, "quantity": 1 }
+  ]
+}
+
+### Order exceeding stock -> 422
+POST {{gateway}}/orders
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "customerName": "Greedy Buyer",
+  "customerEmail": "greedy@example.com",
+  "items": [
+    { "productId": 4, "quantity": 99999 }
+  ]
+}
+
+### List all orders
+GET {{gateway}}/orders
+Authorization: Bearer {{token}}
+
+### Get one order
+GET {{gateway}}/orders/1
+Authorization: Bearer {{token}}
+
+### -------------------- NOTIFICATIONS (via gateway) --------------------
+
+### List notifications
+GET {{gateway}}/notifications
+Authorization: Bearer {{token}}
+
+### Send one directly
+POST {{gateway}}/notifications
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "recipient": "ada@example.com",
+  "channel": "EMAIL",
+  "subject": "Test",
+  "message": "Hello from the notification service",
+  "relatedOrderId": null
+}

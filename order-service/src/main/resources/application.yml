@@ -1,0 +1,75 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:postgresql://ecommerce-db.cfyiuuqsk69c.us-east-2.rds.amazonaws.com:5432/orderdb?sslmode=require
+    driver-class-name: org.postgresql.Driver
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  security:
+    oauth2:
+      # As a resource server: validate incoming JWTs.
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9000
+      # As a client: obtain client-credentials tokens for outbound calls to
+      # product-service and notification-service.
+      client:
+        registration:
+          ecommerce-client:
+            authorization-grant-type: client_credentials
+            client-id: ecommerce-client
+            client-secret: ${OAUTH_CLIENT_SECRET:ecommerce-secret}
+            scope: api.read,api.write
+        provider:
+          ecommerce-client:
+            token-uri: http://localhost:9000/oauth2/token
+
+# Base URLs of downstream services used by the REST clients
+clients:
+  product-service:
+    base-url: http://localhost:8081
+  notification-service:
+    base-url: http://localhost:8083
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, circuitbreakers, retries
+  health:
+    circuitbreakers:
+      enabled: true
+
+# Resilience4j instance config for the product-service call.
+resilience4j:
+  circuitbreaker:
+    instances:
+      productService:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        register-health-indicator: true
+  retry:
+    instances:
+      productService:
+        max-attempts: 3
+        wait-duration: 500ms

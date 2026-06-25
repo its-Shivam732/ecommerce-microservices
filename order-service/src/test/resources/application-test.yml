@@ -1,0 +1,42 @@
+server:
+  port: 0
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:orderdb-test;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+  security:
+    oauth2:
+      client:
+        registration:
+          ecommerce-client:
+            authorization-grant-type: client_credentials
+            client-id: ecommerce-client
+            client-secret: test-secret
+            scope: api.read,api.write
+        provider:
+          ecommerce-client:
+            token-uri: http://localhost:9000/oauth2/token
+
+clients:
+  product-service:
+    base-url: http://localhost:8081
+  notification-service:
+    base-url: http://localhost:8083
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      productService:
+        sliding-window-size: 5
+        failure-rate-threshold: 50
+  retry:
+    instances:
+      productService:
+        max-attempts: 2
