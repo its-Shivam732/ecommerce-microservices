@@ -247,17 +247,3 @@ The order -> product reserve call is wrapped with Resilience4j **Retry** + **Cir
 To see the breaker trip: start order-service but NOT product-service, POST a few orders, and
 watch `GET http://localhost:8082/actuator/circuitbreakers` move the breaker CLOSED -> OPEN.
 
-## Known limitations (intentional, scoped for the assignment)
-
-- **No compensation across order lines.** If an order has several lines and a later line
-  fails to reserve, stock reserved for earlier lines is not released. A full saga would emit
-  a compensating release. This is the documented trade-off of the synchronous-reserve design.
-- **Per-call idempotency only.** order-service generates a fresh idempotency key per reserve
-  call, which protects the network hop. End-to-end "place this exact order once" would need a
-  client-supplied order-level key.
-- **Dual notification paths.** Both the REST call and the Kafka event create a notification
-  for a placed order, so a confirmed order produces two notification rows (channels `EMAIL`
-  and `EMAIL_KAFKA`). This is intentional for the demo, to make the event-driven path visible;
-  a production system would use one path (the event) and retain REST only for manual sends.
-- **Auth-server signing key is regenerated at each startup**, so restarting the auth-server
-  invalidates previously issued tokens. A fixed key from config would persist them.
