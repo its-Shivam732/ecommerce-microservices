@@ -61,7 +61,7 @@ auth-server, since the downstream services are protected.
 
 Asynchronous (Kafka): when an order is confirmed, order-service also publishes an
 `OrderPlaced` event to the `order-notifications` Kafka topic. notification-service consumes
-it and creates a notification. This is in addition to the REST notification path (POST endpoint given in assignment), demonstrating the event-driven pattern alongside the synchronous one. **This is just for homework sake where we demonstrate both aynchronus(kafka) and synchronus(rest) message passing**
+it and creates a notification. **This is in addition to the REST notification path (POST endpoint given in assignment), demonstrating the event-driven pattern alongside the synchronous one. This is just for homework sake where we demonstrate both aynchronus(kafka) and synchronus(rest) message passing**
 
 ## Messaging (Kafka)
 
